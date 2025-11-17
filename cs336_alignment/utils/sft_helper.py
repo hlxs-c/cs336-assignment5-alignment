@@ -120,6 +120,28 @@ def get_response_log_probs(
   }
 
 
+def masked_normalize(
+  tensor: torch.Tensor,
+  mask: torch.Tensor,
+  normalize_constant: float,
+  dim: int | None = None,
+) -> torch.Tensor:
+  """
+  Sum over a dimension and normalize by a constant, considering only those elements where mask == 1.
+  Args:
+    tensor (torch.Tensor): The tensor to sum and normalize.
+    mask (torch.Tensor): Same shape as tensor; positions with 1 are included in the sum.
+    normalize_constant (float): float the constant to divide by for normalization.
+    dim: int | None the dimension to sum along before normalization. If None, sum over all dimensions.
+  Returns:
+    torch.Tensor: the normalized sum, where masked elements (mask == 0) don't contribute to the sum.
+  """
+  masked_tensor = tensor.masked_fill(mask == 0, 0)
+  sum_tensor = torch.sum(masked_tensor, dim=dim)
+  normalized_sum = sum_tensor / normalize_constant
+  return normalized_sum
+
+
 if __name__ == "__main__":
   device = "cuda:1"
 
