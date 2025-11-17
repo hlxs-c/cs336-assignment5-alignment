@@ -1,9 +1,12 @@
 import torch
+import torch.nn.functional as F
 import numpy as np
 
 from torch.nn.utils.rnn import pad_sequence
 
 from transformers import PreTrainedTokenizerBase, AutoTokenizer
+
+from cs336_alignment.utils.softmax import log_softmax
 
 def tokenize_prompt_and_output(
   prompt_strs: list[str], 
@@ -60,6 +63,25 @@ def tokenize_prompt_and_output(
     "labels": labels,
     "response_mask": response_mask
   }
+
+def compute_entropy(logits: torch.Tensor) -> torch.Tensor:
+  """
+  Get the entropy of the next-token predictions (i.e., entropy over the vocabulary diemsion).
+  Args:
+    logits (torch.Tensor): Tensor of shape (batch_size, sequence_length, vocab_size)
+      containing unnormalized logits.
+  Returns:
+    torch.Tensor, shape (batch_size, sequence_length). The entropy for each next-token prediction.
+  Note:
+    Entropy (H(p)) = - sum_x p(x)*log p(x)
+  """
+  # 1.使用 log_softmax 计算数值稳定性的对数概率: log(p(x))
+  log_probs = log_softmax(x=logits, dim=-1)
+  # 2.通过exp操作还原概率 p(x)
+  probs = log_probs.exp()
+  # 3.计算熵: 计算每个元素的 p(x) * log(p(x))，然后求和并取负数
+  entropy = -torch.sum(probs * log_probs, dim=-1)
+  return entropy
 
 if __name__ == "__main__":
   prompts = [
