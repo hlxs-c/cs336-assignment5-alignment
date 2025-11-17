@@ -4,7 +4,7 @@ import numpy as np
 
 from torch.nn.utils.rnn import pad_sequence
 
-from transformers import PreTrainedTokenizerBase, AutoTokenizer
+from transformers import  PreTrainedModel, PreTrainedTokenizerBase, AutoModelForCausalLM, AutoTokenizer
 
 from cs336_alignment.utils.softmax import log_softmax
 
@@ -83,7 +83,46 @@ def compute_entropy(logits: torch.Tensor) -> torch.Tensor:
   entropy = -torch.sum(probs * log_probs, dim=-1)
   return entropy
 
+
+def get_response_log_probs(
+  model: PreTrainedModel,
+  input_ids: torch.Tensor,
+  labels: torch.Tensor,
+  return_token_entropy: bool = False,
+) -> dict[str, torch.Tensor]:
+  """
+  Args:
+    model (PreTrainedModel): HuggingFace model used for scoring 
+      (placed on the correct device and in inference mode if gradients should not be computed.)
+    input_ids (torch.Tensor): shape (batch_size, sequence_length), concatenated prompt + response token as produced by tokenization method.
+    labels (torch.Tensor): shape (batch_size, sequence_length), labels as produced by tokenization method.
+    return_token_entropy (bool): If True, also return per-token entropy by calling compute_entropy.
+  Returns:
+    dict[str, torch.Tensor]:
+      "log_probs": shape (batch_size, sequence_length), conditional log-probabilities
+      "token_entropy": optional, shape (batch_size, sequence_length), per-token entropy for each position (present only if return_token_entropy=True)
+  """
+  # 1.获取模型的logits输出
+  logits = model(input_ids).logits  # shape [batch_size, sequence_length, vocab_size]
+  
+  # 2.计算log_softmax得到对数概率
+  log_probs = log_softmax(logits, dim=-1) # shape [batch_size, sequence_length, vocab_size]
+
+  # 3.使用gather选择标签对应位置的概率，并压缩最后一个维度
+  log_probs = torch.gather(input=log_probs, dim=-1, index=labels.unsqueeze(-1)) # shape [batch_size, sequence_length]
+  
+  # 4.计算熵（如果需要）
+  token_entropy = compute_entropy(logits=logits) if return_token_entropy else None
+
+  return {
+    "log_probs": log_probs.squeeze(-1),
+    "token_entropy": token_entropy
+  }
+
+
 if __name__ == "__main__":
+  device = "cuda:1"
+
   prompts = [
     "Hello, world!",
     "This is a test.",
@@ -96,3 +135,15 @@ if __name__ == "__main__":
   print(res["input_ids"])
   print(res["labels"])
   print(res["response_mask"])
+
+  model = AutoModelForCausalLM.from_pretrained(
+    pretrained_model_name_or_path="Qwen/Qwen2.5-Math-1.5B",
+    torch_dtype=torch.bfloat16,
+    attn_implementation="flash_attention_2"
+  ).to(device)
+
+  res1 = get_response_log_probs(
+    model=model,
+    input_ids=res["input_ids"].to(device),
+    labels=res["labels"].to(device),
+  )
