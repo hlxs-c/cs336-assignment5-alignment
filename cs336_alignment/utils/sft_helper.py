@@ -142,6 +142,50 @@ def masked_normalize(
   return normalized_sum
 
 
+def sft_microbatch_train_step(
+  policy_log_probs: torch.Tensor,
+  response_mask: torch.Tensor,
+  gradient_accumulation_steps: int,
+  normalize_constant: float = 1.0,
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+  """
+  Execute a forward-and-backward pass on a microbatch.
+  Args:
+    policy_log_probs (torch.Tensor): (batch_size, sequence_length), per-predicted-token log-probabilities from SFT policy beging trained.
+    response_mask (torch.Tensor): (batch_size, sequence_length), `1` for response tokens, `0` for prompt/padding.
+    gradient_accumulation_steps (int): Number of microbatches per optimizer step.
+    normalize_constant: The constant by which to divide the sum. It is fine to leave this as 1.0.
+  Returns:
+    tuple[torch.Tensor, dict[str, torch.Tensor]]:
+      loss (torch.Tensor): scalar tensor. The microbatch loss, adjusted for gradient accumulation. We return this so we can log it.
+      metadata (dict[str, torch.Tensor]): Dict with metadata from the underlying loss call, and any other statistics you might want to log.
+  """
+  # 1.计算每个token的损失，即 -log(p(x))
+  per_token_loss = - policy_log_probs
+  
+  # 2.计算响应部分的损失：沿着序列维度求和，得到这个批次中每个样本的总响应损失
+  response_loss = masked_normalize(
+    tensor=per_token_loss,
+    mask=response_mask,
+    normalize_constant=normalize_constant,
+    dim=-1
+  ) # [batch_size]
+
+  # 3.计算批次平均损失并为梯度累积做缩放
+  loss = response_loss.mean() / gradient_accumulation_steps
+
+  # 4. 反向传播
+  loss.backward()
+
+  metadata = {
+    "policy_log_probs": policy_log_probs,
+    "response_mask": response_mask,
+    "gradient_accumulation_steps": gradient_accumulation_steps
+  }
+
+  return loss, metadata
+
+
 if __name__ == "__main__":
   device = "cuda:1"
 
@@ -153,10 +197,10 @@ if __name__ == "__main__":
 
   tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-Math-1.5B")
 
-  res = tokenize_prompt_and_output(prompt_strs=prompts, output_strs=prompts, tokenizer=tokenizer)
-  print(res["input_ids"])
-  print(res["labels"])
-  print(res["response_mask"])
+  tokenized_res = tokenize_prompt_and_output(prompt_strs=prompts, output_strs=prompts, tokenizer=tokenizer)
+  print(tokenized_res["input_ids"])
+  print(tokenized_res["labels"])
+  print(tokenized_res["response_mask"])
 
   model = AutoModelForCausalLM.from_pretrained(
     pretrained_model_name_or_path="Qwen/Qwen2.5-Math-1.5B",
@@ -164,8 +208,15 @@ if __name__ == "__main__":
     attn_implementation="flash_attention_2"
   ).to(device)
 
-  res1 = get_response_log_probs(
+  log_probs_res = get_response_log_probs(
     model=model,
-    input_ids=res["input_ids"].to(device),
-    labels=res["labels"].to(device),
+    input_ids=tokenized_res["input_ids"].to(device),
+    labels=tokenized_res["labels"].to(device),
+  )
+
+  sft_microbatch_train_step_res = sft_microbatch_train_step(
+    policy_log_probs=log_probs_res["log_probs"].to(device),
+    response_mask=tokenized_res["response_mask"].to(device),
+    gradient_accumulation_steps=2,
+    normalize_constant=1.0
   )
