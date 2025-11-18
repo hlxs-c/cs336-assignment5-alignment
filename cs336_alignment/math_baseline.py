@@ -61,13 +61,15 @@ def format_prompts(prompt_template_path: str, data_path: str) -> tuple[list[str]
 
       # 提取 question 和 answer
       question = data["question"]
-      answer = data["answer"]
+      output = data["answer"]
+
+      think_and_answer = output.split("#### ")
 
       # 将 question 插入到prompt模板，形成输入prompt
       prompt = prompt_template.replace("{question}", question)
 
       prompts.append(prompt)
-      answers.append(answer)
+      answers.append(think_and_answer[1])
   
   return prompts, answers
       
@@ -84,6 +86,7 @@ if __name__ == "__main__":
 
   # 创建VLLM模型
   vllm_model = LLM(model="Qwen/Qwen2.5-Math-1.5B")
+  # vllm_model = LLM(model="output/sft_output/final_model")
   sampling_params = SamplingParams(temperature=1.0, top_p=1.0, max_tokens=1024, stop=["</answer>"], include_stop_str_in_output=True)
 
   # 进行评估，并将评估结果序列化至磁盘
