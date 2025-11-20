@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 
-from typing import Callable
+from typing import Callable, Literal
 from einops import rearrange
 
 def compute_group_normalized_rewards(
@@ -129,6 +129,55 @@ def compute_grpo_clip_loss(
     "ratio_std": ratio.std()
   }
 
+  return loss, metadata
+
+
+def compute_policy_gradient_loss(
+  policy_log_probs: torch.Tensor,
+  loss_type: Literal["no_baseline", "reinforce_with_baseline", "grpo_clip"],
+  raw_rewards: torch.Tensor | None = None,
+  advantages: torch.Tensor | None = None,
+  old_log_probs: torch.Tensor | None = None,
+  cliprange: float | None = None,
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+  """
+  This is a convenience wrapper that dispatches to the correct loss routine (no_baseline, reinforce_with_baseline, grpr_clip)
+  and returns both the per-token loss and any auxiliary statistics.
+  Args:
+    policy_log_probs (torch.Tensor): shape (batch_size, sequence_length), per-token log-probabilities from the policy being trained.
+    loss_type (Literal): One of "no_baseline", "reinforce_with_baseline", or "grpo_clip".
+    raw_rewards (torch.Tensor | None): Required if loss_type == "no_baseline"; shape (batch_size, 1).
+    advantages (torch.Tensor | None): Required for "reinforce_with_baseline" and "grpo_clip"; shape (batch_size, 1).
+    old_log_probs (torch.Tensor | None): Required for "grpo_clip"; shape (batch_size, sequence_length).
+    cliprange (float | None): Required for "grpo_clip"; scalar epsilon used for clipping.
+  Returns:
+    loss (torch.Tensor): shape (batch_size, sequence_length), per-token loss.
+    metadata (dict[str, torch.Tensor]): statistics from the underlying routine (e.g., clip fraction for GRPO-Clip).
+  """
+  metadata = None
+  if loss_type == "no_baseline":
+    assert raw_rewards is not None, "raw_rewards is required for no_baseline."
+    loss = compute_naive_policy_gradient_loss(
+      raw_rewards_or_advantages=raw_rewards,
+      policy_log_probs=policy_log_probs
+    )
+  elif loss_type == "reinforce_with_baseline":
+    assert advantages is not None, "advantages is required for reinforce_with_baseline."
+    loss = compute_naive_policy_gradient_loss(
+      raw_rewards_or_advantages=advantages,
+      policy_log_probs=policy_log_probs
+    )
+  elif loss_type == "grpo_clip":
+    assert advantages is not None, "advantages is required for grpo_clip."
+    assert old_log_probs is not None, "old_log_probs is required for grpo_clip."
+    assert cliprange is not None, "cliprange is required for grpo_clip."
+    loss, metadata = compute_grpo_clip_loss(
+      advantages=advantages,
+      policy_log_probs=policy_log_probs,
+      old_log_probs=old_log_probs,
+      cliprange=cliprange
+    )
+  
   return loss, metadata
 
 
