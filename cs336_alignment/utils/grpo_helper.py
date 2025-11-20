@@ -181,6 +181,33 @@ def compute_policy_gradient_loss(
   return loss, metadata
 
 
+def masked_mean(
+  tensor: torch.Tensor,
+  mask: torch.Tensor,
+  dim: int | None = None,
+) -> torch.Tensor:
+  """
+  Compute the mean of tensor along a given dimension, considering only those elements where mask == 1.
+  Args:
+    tensor (torch.Tensor): The data to be averaged.
+    mask (torch.Tensor): Same shape as tensor; positions with 1 are included in the mean.
+    dim (int | None): Dimension over which to average. If None, compute the mean over masked elements.
+  Returns:
+    torch.Tensor: The masked mean; shape matches tensor.mean(dim) semantics.
+  """
+  # 1. 将掩码为0的位置填充为0，这样在求和时这些位置不会贡献值
+  tensor = tensor.masked_fill(mask==0, 0)
+
+  # 2. 沿指定维度对填充后的张量求和（只有掩码为1的位置会贡献值到总和中）
+  tensor_sum = tensor.sum(dim=dim)
+
+  # 3. 计算掩码沿相同维度的和，得到有效元素的数量（mask 中1的数量就是参与计算均值的有效元素数量）
+  masked_sum = mask.sum(dim=dim)
+
+  # 4. 计算均值：有效元素的总和除以有效元素的数量
+  # 注意：如果 masked_sum 为0（即没有有效元素），这里会产生除零错误（在实际使用中应确保mask中至少包含一个1，或者添加 eps 保护措施）
+  return tensor_sum / masked_sum
+
 if __name__ == "__main__":
   # 仿照 test_compute_group_normalized_rewards 编写了以下测试代码用于调试（最终错误在于 np.std 和 torch.std 的默认计算区别）
   def dummy_reward_fn(response, ground_truth):
