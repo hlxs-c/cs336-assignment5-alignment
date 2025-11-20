@@ -65,6 +65,72 @@ def compute_group_normalized_rewards(
   return advantages, raw_rewards, metadata
 
 
+def compute_naive_policy_gradient_loss(
+  raw_rewards_or_advantages: torch.Tensor,
+  policy_log_probs: torch.Tensor,
+) -> torch.Tensor:
+  """
+  Compute the policy-gradient loss at every token, where raw_rewards_or_advantages is either the raw reward or an already-normalized advantage.
+  Args:
+    raw_rewards_or_advantages (torch.Tensor): Shape (batch_size, 1), scalar reward/advantage for each rollout response.
+    policy_log_probs (torch.Tensor): Shape (batch_size, sequence_length), logprobs for each token.
+  Returns:
+    torch.Tensor: Shape (batch_size, sequence_length), the per-token policy-gradient loss 
+      (to be aggregated across the batch and sequence dimensions in the training loop).
+  
+  Note:
+    With question `q`, response `o`, and response token `o_t`, the naive per-token policy gradient loss = 
+      -A_t · log p_{\theta}(o_t|q, o_{<t})
+  """
+  return -raw_rewards_or_advantages * policy_log_probs
+
+def compute_grpo_clip_loss(
+  advantages: torch.Tensor,
+  policy_log_probs: torch.Tensor,
+  old_log_probs: torch.Tensor,
+  cliprange: float,
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+  """
+  Compute the per-token GRPO-Clip loss.
+  Args:
+    advantages (torch.Tensor): Shape (batch_size, 1), per-example advantages A.
+    policy_log_probs (torch.Tensor): Shape (batch_size, sequence_length), per-token log probs from the policy being trained.
+    old_log_probs (torch.Tensor): Shape (batch_size, sequence_length), per-token log probs from the old policy.
+    cliprange (float): clip parameter epsilon (e.g. 0.2).
+  Returns:
+    tuple[torch.Tensor, dict[str, torch.Tensor]]:
+      loss (torch.Tensor): Shape (batch_size, sequence_length), the per-token clipped loss.
+      metadata (dict[str, torch.Tensor]): dict containing whatever you want to log.
+        Suggest logging whether each token was clipped or not, i.e., whether the clipped policy gradient loss on RHS of the min was lower thah the LHS.
+  Note:
+    The per-token GRPO-Clip loss is:
+      -min(ratio_t · A_t, clip(ratio_t, 1-epsilon, 1+epsilon) · A_t)
+    where ratio_t = policy_prob_t / old_prob_t
+  """
+  # 1. 计算重要性比率（概率比率）
+  ratio = torch.exp(policy_log_probs - old_log_probs)
+  
+  # 2. 对 ratio 进行裁剪
+  clipped_ratio = torch.clamp(ratio, 1.0 - cliprange, 1.0 + cliprange)
+
+  # 3. 计算损失
+  unclipped_loss = ratio * advantages
+  clipped_loss = clipped_ratio * advantages
+
+  # 4. 逐元素取最小值（保守更新）
+  loss = -torch.minimum(unclipped_loss, clipped_loss)
+
+  # 5. 记录哪些token被裁剪了
+  is_clipped = clipped_ratio != ratio
+  metadata = {
+    "is_clipped": is_clipped,
+    "clipped_fraction": is_clipped.float().mean(),
+    "ratio_mean": ratio.mean(),
+    "ratio_std": ratio.std()
+  }
+
+  return loss, metadata
+
 
 if __name__ == "__main__":
   # 仿照 test_compute_group_normalized_rewards 编写了以下测试代码用于调试（最终错误在于 np.std 和 torch.std 的默认计算区别）
